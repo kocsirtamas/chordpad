@@ -1,0 +1,164 @@
+[
+  {
+    "name": "vocoder juno",
+    "values": {
+      "keyRoot": 0,
+      "scale": "major",
+      "baseOctave": 4,
+      "mode": "chord",
+      "bpm": 120,
+      "instrument": "junoPoly",
+      "sustain": 1.2,
+      "cutoff": 2500,
+      "volume": 0.85,
+      "arpPattern": "up",
+      "arpRate": "1/16",
+      "arpChord": "arp",
+      "strumSpeed": "medium",
+      "reverb": false,
+      "reverbMix": 0.35,
+      "reverbTime": 2.25,
+      "chorus": false,
+      "flanger": false,
+      "stereo": false,
+      "delay": false,
+      "tremolo": false,
+      "vibrato": false,
+      "glide": "off",
+      "voices": 8,
+      "adsr": "off",
+      "inversion": 0,
+      "voiceLeading": false,
+      "bass": "off",
+      "kit": "tight",
+      "beat": "off",
+      "beatVariation": "original",
+      "autoDrum": "off",
+      "metronome": false,
+      "countIn": false,
+      "autoBounce": true,
+      "samplerRaw": true,
+      "samplerLoop": false,
+      "vocoder": true,
+      "vocoderFormant": 0,
+      "vocoderQ": 3.7,
+      "vocoderAttack": 0.003,
+      "vocoderRelease": 0.025,
+      "vocoderNoise": 0.05,
+      "vocoderGate": 0.02,
+      "modLayer": "base",
+      "perKey": [
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        }
+      ],
+      "toLoop": {}
+    }
+  },
+  {
+    "name": "vocoder tri",
+    "values": {
+      "keyRoot": 0,
+      "scale": "major",
+      "baseOctave": 4,
+      "mode": "chord",
+      "bpm": 120,
+      "instrument": "tri",
+      "sustain": 1.2,
+      "cutoff": 2500,
+      "volume": 0.85,
+      "arpPattern": "up",
+      "arpRate": "1/16",
+      "arpChord": "arp",
+      "strumSpeed": "medium",
+      "reverb": false,
+      "reverbMix": 0.35,
+      "reverbTime": 2.25,
+      "chorus": false,
+      "flanger": false,
+      "stereo": false,
+      "delay": false,
+      "tremolo": false,
+      "vibrato": false,
+      "glide": "off",
+      "voices": 8,
+      "adsr": "off",
+      "inversion": 0,
+      "voiceLeading": false,
+      "bass": "off",
+      "kit": "tight",
+      "beat": "off",
+      "beatVariation": "original",
+      "autoDrum": "off",
+      "metronome": false,
+      "countIn": false,
+      "autoBounce": true,
+      "samplerRaw": true,
+      "samplerLoop": false,
+      "vocoder": true,
+      "vocoderFormant": 0,
+      "vocoderQ": 3.7,
+      "vocoderAttack": 0.003,
+      "vocoderRelease": 0.025,
+      "vocoderNoise": 0.05,
+      "vocoderGate": 0.02,
+      "modLayer": "base",
+      "perKey": [
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        },
+        {
+          "octave": 0,
+          "lock": null
+        }
+      ],
+      "toLoop": {}
+    }
+  }
+]

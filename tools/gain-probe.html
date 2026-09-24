@@ -1,0 +1,268 @@
+<!DOCTYPE html><meta charset="utf-8"><title>gain probe</title>
+<script type="module">
+import { createEngine } from '../src/audio/engine.js';
+import { voicing } from '../src/theory.js';
+
+const SR = 48000;
+
+// An OfflineAudioContext reports "suspended" until startRendering, and the
+// engine refuses to schedule against a context that is not running. Tell it the
+// truth it needs: rendering is exactly when this clock does run.
+function offline(seconds) {
+  const ctx = new OfflineAudioContext(1, SR * seconds, SR);
+  Object.defineProperty(ctx, 'state', { get: () => 'running' });
+  return ctx;
+}
+
+async function render(label, build, seconds = 2) {
+  const ctx = offline(seconds);
+  const engine = createEngine({ contextFactory: () => ctx });
+  engine.ensureContext();
+  build(engine);
+  const buf = await ctx.startRendering();
+  const d = buf.getChannelData(0);
+  let peak = 0, clipped = 0;
+  for (let i = 0; i < d.length; i++) {
+    const a = Math.abs(d[i]);
+    if (a > peak) peak = a;
+    if (a > 1) clipped++;
+  }
+  return { label, peak: +peak.toFixed(3), clipped, pctClipped: +(100 * clipped / d.length).toFixed(2) };
+}
+
+const none = new Set();
+
+// Reproduces the mobile case: a suspended context does not advance currentTime,
+// so the press and its release land on the same audio time.
+async function renderTap(label, gap) {
+  const ctx = offline(2);
+  const engine = createEngine({ contextFactory: () => ctx });
+  engine.ensureContext();
+  const set = engine.playChord(voicing(0, 0, new Set(), 4), { instrument: 'organ', cutoff: 2500 });
+  for (const v of set.voices) v.stop(gap, 0.9);
+  const d = (await ctx.startRendering()).getChannelData(0);
+  let peak = 0;
+  for (let i = 0; i < d.length; i++) peak = Math.max(peak, Math.abs(d[i]));
+  return { label, peak: +peak.toFixed(3), clipped: 0, pctClipped: 0 };
+}
+const results = [];
+const opts = (instrument) => ({ instrument, cutoff: 2500 });
+
+results.push(await render('1 triad, warm/sine, vol 0.7',
+  e => e.playChord(voicing(0, 0, none, 4), opts('warm'))));
+results.push(await render('1 triad, pluck/saw, vol 0.7',
+  e => e.playChord(voicing(0, 0, none, 4), opts('pluck'))));
+results.push(await render('1 triad, organ/square, vol 0.7',
+  e => e.playChord(voicing(0, 0, none, 4), opts('organ'))));
+results.push(await render('5-note Csus47add9, organ, vol 0.7',
+  e => e.playChord(voicing(0, 0, new Set(['sus4','seventh','add9']), 4), opts('organ'))));
+results.push(await render('2 chords held at once, organ, vol 0.7',
+  e => { e.playChord(voicing(0, 0, none, 4), opts('organ')); e.playChord(voicing(0, 5, none, 4), opts('organ')); }));
+results.push(await render('4 chords held at once, organ, vol 0.7',
+  e => { for (const d of [0,2,4,5]) e.playChord(voicing(0, d, none, 4), opts('organ')); }));
+results.push(await render('1 triad, organ, master 1.0',
+  e => { e.setVolume(1.0); e.playChord(voicing(0, 0, none, 4), opts('organ')); }));
+results.push(await render('8 chords held at once, organ',
+  e => { for (const d of [0,1,2,3,4,5,6,0]) e.playChord(voicing(0, d % 7, none, 4), opts('organ')); }));
+results.push(await render('1 triad, organ, master 0.35',
+  e => { e.setVolume(0.35); e.playChord(voicing(0, 0, none, 4), opts('organ')); }));
+
+results.push(await renderTap('release at the same audio time as press', 0));
+results.push(await renderTap('release 5 ms after press', 0.005));
+results.push(await renderTap('release 500 ms after press', 0.5));
+
+// Rapid playing: chords fired close together, each held briefly, tails overlapping.
+async function renderRapid(label, gapMs, holdMs, count, seconds = 4) {
+  const ctx = offline(seconds);
+  const engine = createEngine({ contextFactory: () => ctx });
+  engine.ensureContext();
+  const sets = [];
+  for (let i = 0; i < count; i++) {
+    const at = i * gapMs / 1000;
+    // OfflineAudioContext currentTime stays at 0 until rendering, so schedule by
+    // hand to model presses spread over time.
+    const set = engine.playChord(voicing(0, i % 7, new Set(), 4), { instrument: 'organ', cutoff: 2500 });
+    for (const v of set.voices) {
+      v.nodes.osc.frequency.setValueAtTime(v.nodes.osc.frequency.value, at);
+      v.nodes.gain.gain.cancelScheduledValues(at);
+      v.nodes.gain.gain.setValueAtTime(0, at);
+      v.nodes.gain.gain.linearRampToValueAtTime(0.8 / set.voices.length, at + 0.012);
+      v.nodes.gain.gain.linearRampToValueAtTime(0, at + holdMs / 1000 + 0.9);
+    }
+    sets.push(set);
+  }
+  const d = (await ctx.startRendering()).getChannelData(0);
+  let peak = 0, clipped = 0;
+  for (let i = 0; i < d.length; i++) {
+    const a = Math.abs(d[i]);
+    if (a > peak) peak = a;
+    if (a > 1) clipped++;
+  }
+  return { label, peak: +peak.toFixed(3), clipped, pctClipped: +(100 * clipped / d.length).toFixed(2) };
+}
+
+results.push(await renderRapid('6 chords, 60 ms apart, 120 ms holds', 60, 120, 6));
+results.push(await renderRapid('10 chords, 40 ms apart, 80 ms holds', 40, 80, 10));
+
+// Is the limiter doing anything during ordinary play? Render the same chord
+// with it in circuit and bypassed, and compare sample for sample.
+async function renderLimiterWork(label, instrument, chords) {
+  async function once(bypass) {
+    const ctx = offline(2);
+    const engine = createEngine({ contextFactory: () => ctx });
+    engine.ensureContext();
+    if (bypass) {
+      engine.voiceBus().disconnect();
+      engine.voiceBus().connect(engine.masterGain());
+    }
+    for (let i = 0; i < chords; i++) {
+      engine.playChord(voicing(0, i % 7, new Set(), 4), { instrument, cutoff: 2500 });
+    }
+    return (await ctx.startRendering()).getChannelData(0);
+  }
+  const [limited, bypassed] = [await once(false), await once(true)];
+  // A DynamicsCompressor has lookahead latency, so comparing sample by sample
+  // measures the delay rather than the gain reduction. Compare windowed RMS,
+  // which does not care about a few milliseconds of shift.
+  // Compare the sustained middle only. Note boundaries shift by the
+  // compressor's lookahead, which would otherwise dominate the comparison.
+  const from = Math.round(SR * 0.3);
+  const to = Math.round(SR * 1.0);
+  let a = 0, b = 0, peak = 0;
+  for (let i = from; i < to; i++) {
+    a += limited[i] * limited[i];
+    b += bypassed[i] * bypassed[i];
+  }
+  for (let i = 0; i < limited.length; i++) peak = Math.max(peak, Math.abs(limited[i]));
+  a = Math.sqrt(a / (to - from));
+  b = Math.sqrt(b / (to - from));
+  const db = b > 0 ? 20 * Math.log10(a / b) : 0;
+  return { label, peak: +peak.toFixed(3), clipped: 0, pctClipped: 0, limiterWork: +db.toFixed(2) };
+}
+
+results.push(await renderLimiterWork('LIMITER: 1 chord, organ', 'organ', 1));
+results.push(await renderLimiterWork('LIMITER: 1 chord, sine', 'warm', 1));
+results.push(await renderLimiterWork('LIMITER: 4 chords, organ', 'organ', 4));
+
+// Drums are on their own bus at their own level now, so the combination is the
+// case worth checking for headroom.
+async function renderWithDrums(label, chords) {
+  const ctx = offline(3);
+  const engine = createEngine({ contextFactory: () => ctx });
+  engine.ensureContext();
+  for (let i = 0; i < chords; i++) {
+    engine.playChord(voicing(0, i % 7, new Set(), 4), { instrument: 'organ', cutoff: 2500 });
+  }
+  for (let i = 0; i < 8; i++) {
+    engine.strikeDrum(i % 2 ? 'snare' : 'kick', 'x9x', i * 0.25);
+    engine.strikeDrum('hatClosed', 'x9x', i * 0.25 + 0.125);
+  }
+  const d = (await ctx.startRendering()).getChannelData(0);
+  let peak = 0, clipped = 0;
+  for (let i = 0; i < d.length; i++) {
+    const a = Math.abs(d[i]);
+    if (a > peak) peak = a;
+    if (a > 1) clipped++;
+  }
+  return { label, peak: +peak.toFixed(3), clipped, pctClipped: +(100 * clipped / d.length).toFixed(2) };
+}
+
+results.push(await renderWithDrums('beat alone', 0));
+results.push(await renderWithDrums('beat under 1 chord', 1));
+results.push(await renderWithDrums('beat under 4 chords', 4));
+
+// A click is a step between one sample and the next. Render a note, release it,
+// and report the largest jump and when it happened.
+async function renderRelease(label, instrument, holdSeconds, release) {
+  const ctx = offline(4);
+  const engine = createEngine({ contextFactory: () => ctx });
+  engine.ensureContext();
+  const set = engine.playChord(voicing(0, 5, new Set(), 4), { instrument, cutoff: 2500 });
+  for (const v of set.voices) v.stop(holdSeconds, release);
+
+  const d = (await ctx.startRendering()).getChannelData(0);
+  let worst = 0, worstAt = 0, peak = 0;
+  for (let i = 1; i < d.length; i++) {
+    const step = Math.abs(d[i] - d[i - 1]);
+    if (step > worst) { worst = step; worstAt = i / SR; }
+    peak = Math.max(peak, Math.abs(d[i]));
+  }
+  return {
+    label, peak: +peak.toFixed(3), clipped: 0, pctClipped: 0,
+    jump: +worst.toFixed(4), jumpAt: +worstAt.toFixed(3), releasedAt: holdSeconds,
+  };
+}
+
+results.push(await renderRelease('RELEASE: warm, held 1s', 'warm', 1, 0.9));
+results.push(await renderRelease('RELEASE: warm, tapped', 'warm', 0.1, 0.9));
+results.push(await renderRelease('RELEASE: pad, held 2s', 'oceanPad', 2, 0.9));
+
+// Reproduces the real call sequence: the release goes through engine.stopChord
+// at a genuine currentTime, so the bus rebalance and the limiter are in play
+// exactly as they are in the app. suspend() is what makes currentTime real
+// inside an offline render.
+async function renderRealRelease(label, instrument, holdSeconds, { rebalance = true } = {}) {
+  const ctx = offline(4);
+  const engine = createEngine({ contextFactory: () => ctx });
+  engine.ensureContext();
+  const set = engine.playChord(voicing(0, 5, new Set(), 4), { instrument, cutoff: 2500 });
+
+  // suspend() only resolves once rendering is under way, so the render has to be
+  // started first and awaited afterwards.
+  const rendering = ctx.startRendering();
+  ctx.suspend(holdSeconds).then(() => {
+    engine.stopChord(set, 0.9);
+    ctx.resume();
+  });
+
+  const d = (await rendering).getChannelData(0);
+  const at = Math.round(holdSeconds * SR);
+  let worst = 0, worstAt = 0, near = 0;
+  for (let i = 1; i < d.length; i++) {
+    const step = Math.abs(d[i] - d[i - 1]);
+    if (step > worst) { worst = step; worstAt = i; }
+    if (i > at - 2400 && i < at + 4800 && step > near) near = step;
+  }
+  return {
+    label, peak: 0, clipped: 0, pctClipped: 0,
+    jump: +worst.toFixed(4), jumpAt: +(worstAt / SR).toFixed(3),
+    nearRelease: +near.toFixed(4), releasedAt: holdSeconds,
+  };
+}
+
+results.push(await renderRealRelease('REAL: warm released at 1s', 'warm', 1));
+results.push(await renderRealRelease('REAL: pad released at 1s', 'oceanPad', 1));
+results.push(await renderRealRelease('REAL: organ released at 1s', 'organ', 1));
+
+// Dump the samples straddling the release so the shape can be looked at rather
+// than summarised. A click shows up as a single step that the waveform's own
+// slope cannot explain.
+async function samplesAroundRelease(instrument, holdSeconds) {
+  const ctx = offline(3);
+  const engine = createEngine({ contextFactory: () => ctx });
+  engine.ensureContext();
+  const set = engine.playChord(voicing(0, 5, new Set(), 4), { instrument, cutoff: 2500 });
+  const rendering = ctx.startRendering();
+  ctx.suspend(holdSeconds).then(() => { engine.stopChord(set, 0.9); ctx.resume(); });
+  const d = (await rendering).getChannelData(0);
+  const at = Math.round(holdSeconds * SR);
+  const before = Array.from(d.slice(at - 12, at)).map(v => +v.toFixed(4));
+  const after = Array.from(d.slice(at, at + 12)).map(v => +v.toFixed(4));
+  // The biggest step in a quiet stretch well away from the release, as a
+  // baseline for what this waveform does normally.
+  let baseline = 0;
+  for (let i = at - 4800; i < at - 2400; i++) baseline = Math.max(baseline, Math.abs(d[i] - d[i - 1]));
+  let atRelease = 0;
+  for (let i = at - 48; i < at + 480; i++) atRelease = Math.max(atRelease, Math.abs(d[i] - d[i - 1]));
+  return { instrument, before, after, baseline: +baseline.toFixed(4), atRelease: +atRelease.toFixed(4) };
+}
+
+window.__samples = [
+  await samplesAroundRelease('warm', 1),
+  await samplesAroundRelease('oceanPad', 1),
+];
+
+document.title = 'done';
+window.__results = results;
+document.body.textContent = JSON.stringify(results, null, 1);
+</script>

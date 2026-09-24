@@ -1,0 +1,88 @@
+<!DOCTYPE html><meta charset="utf-8"><title>click probe</title>
+<body style="font:14px ui-monospace,monospace;background:#111;color:#ddd;padding:12px">
+<div id="out">click anywhere to run</div>
+<script type="module">
+import { createEngine } from '../src/audio/engine.js';
+import { voicing } from '../src/theory.js';
+
+// Records the real output on the audio thread and hands back a window of samples
+// either side of the release, so the live signal can be read rather than inferred.
+const WORKLET = `
+class Tap extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buffer = new Float32Array(sampleRate * 4);
+    this.written = 0;
+    this.mark = -1;
+    this.port.onmessage = () => { this.mark = this.written; };
+  }
+  process(inputs, outputs) {
+    const input = inputs[0][0];
+    const output = outputs[0][0];
+    if (!input) return true;
+    output.set(input);
+    for (let i = 0; i < input.length; i++) {
+      if (this.written < this.buffer.length) this.buffer[this.written++] = input[i];
+    }
+    if (this.mark >= 0 && this.written > this.mark + sampleRate * 0.3) {
+      const from = Math.max(0, this.mark - Math.round(sampleRate * 0.05));
+      const to = Math.min(this.written, this.mark + Math.round(sampleRate * 0.25));
+      this.port.postMessage({
+        samples: Array.from(this.buffer.slice(from, to)),
+        releaseAt: this.mark - from,
+        rate: sampleRate,
+      });
+      this.mark = -1;
+    }
+    return true;
+  }
+}
+registerProcessor('tap', Tap);
+`;
+
+async function run() {
+  const ctx = new AudioContext();
+  await ctx.resume();
+  const q = new URLSearchParams(location.search);
+  const engine = createEngine({
+    contextFactory: () => ctx,
+    flags: { noFx: q.has('nofx'), noLimit: q.has('nolimit') },
+  });
+  engine.ensureContext();
+
+  const url = URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' }));
+  await ctx.audioWorklet.addModule(url);
+  const tap = new AudioWorkletNode(ctx, 'tap');
+  engine.masterGain().disconnect();
+  engine.masterGain().connect(tap);
+  tap.connect(ctx.destination);
+
+  const done = new Promise(resolve => { tap.port.onmessage = e => resolve(e.data); });
+
+  // Exactly what the app does: play, hold, then release through stopChord.
+  const set = engine.playChord(voicing(0, 5, new Set(), 4), { instrument: 'warm', cutoff: 2500 });
+  await new Promise(r => setTimeout(r, 1000));
+  if (q.has('rawstop')) {
+    // Straight to the voices, so the bus rebalance in stopChord is out of it.
+    for (const voice of set.voices) voice.stop(ctx.currentTime, 0.9);
+  } else if (q.has('holdonly')) {
+    // Only the hold, no ramp: is cancelAndHoldAtTime itself the step?
+    for (const voice of set.voices) voice.nodes.gain.gain.cancelAndHoldAtTime(ctx.currentTime);
+  } else if (q.has('ramponly')) {
+    // Only the ramp, no hold.
+    for (const voice of set.voices) {
+      voice.nodes.gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.9);
+    }
+  } else {
+    engine.stopChord(set, 0.9);
+  }
+  tap.port.postMessage('mark');
+
+  window.__capture = await done;
+  document.getElementById('out').textContent =
+    `captured ${window.__capture.samples.length} samples at ${window.__capture.rate} Hz`;
+}
+
+addEventListener('pointerdown', () => { run(); }, { once: true });
+run();
+</script>

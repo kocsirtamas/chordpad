@@ -1,0 +1,9 @@
+.superpowers/
+node_modules/
+*.log
+.DS_Store
+__pycache__/
+.pytest_cache/
+mockups/.state-*.png
+# Recorded sessions: listen to them, do not version them
+*.wav
